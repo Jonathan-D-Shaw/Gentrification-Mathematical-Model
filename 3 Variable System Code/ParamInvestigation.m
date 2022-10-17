@@ -1,0 +1,313 @@
+%% Automized Parameter Investigation
+
+%{
+Authors: 
+Juan G. Restrepo
+Nancy Rodriguez
+Jonathan D. Shaw
+
+Date modified: 10/03/2022
+%} 
+
+
+%housekeeping: 
+clear; close all; clc; 
+
+warning('off')
+
+tic
+
+%% Constants/Initial Conditions
+%{
+tspan = [0 1000]; 
+dt = 0.01; 
+t = (0:dt:tspan(end))'; 
+
+%struct of parameters: 
+params = struct('dt', dt, 't', t, 'z', 0.01, 'tau_a', 1, 'tau_n', 0.1, 'tau_c', 0.1, 'epsilon', 0.1, 'un', ones(n,1), 'A_rel_tol', 1e-2, 'A_abs_tol', 1e-4);
+
+
+%nonrandom IC: 
+A0 = linspace(0,1,n); A0 = (A0/sum(A0))'; 
+N0 = sigma(A0,params.z,params.epsilon); 
+C0 = N0;
+%}
+
+%% Perturbation Heat Map Creation: 
+tspans = [660, 550, 450,400,350]; %time spans for different regions 6-10
+t_ranges = [50, 40, 30, 30, 30]; %setting time ranges for variance analyis: 
+
+dt = 0.01; 
+%base parameters: 
+params = struct('dt', dt, 'z', 0.01, 'tau_a', 1, 'epsilon', 0.1);
+
+%setting spans for variable increments: 
+n_vec = (6:1:10)'; 
+tau_n_vec = (0.1:0.1:20)'; 
+tau_c_vec = tau_n_vec; 
+
+
+for i = 1:length(n_vec)  
+    count = 1; 
+
+    n = n_vec(i);
+
+    tspan = tspans(i);
+    t = (0:dt:tspan(end))';
+    params.t = t;
+    t_range = t_ranges(i);
+    t_idx_range = t_range/dt; 
+    t_window = t(end) - 2*t_range; %scalar value - time in after the starting window and before the ending window
+
+    
+    params.un = ones(n,1);
+    %perturbation testing IC: 
+    delta_A = 1e-10; 
+    delta_N = 1e-10; 
+    delta_C = 1e-10; 
+
+    A0 = 1/n * ones(n,1); 
+    N0 = sigma(A0, params.z, params.epsilon);
+    C0 = N0; 
+
+    if mod(n,2) %testing for odd n
+        for l = 1:n-1
+            A0(l) = A0(l) + (-1)^(l-1)*delta_A;
+            N0(l) = N0(l) + (-1)^(l-1)*delta_N;
+            C0(l) = C0(l) + (-1)^(l-1)*delta_C;
+        end
+    else
+        for l = 1:n
+            A0(l) = A0(l) + (-1)^l*delta_A;
+            N0(l) = N0(l) + (-1)^l*delta_N;
+            C0(l) = C0(l) + (-1)^l*delta_C;
+        end
+
+    end
+
+    for j = 1:length(tau_n_vec)
+        for k = 1:length(tau_c_vec)
+           
+            %adding other parameters: 
+            params.tau_n = tau_n_vec(j);
+            params.tau_c = tau_c_vec(k);
+            
+            
+            %running simulation: 
+            [a_mat, ~, ~] = Euler3VarSim(n,A0,N0,C0,params);         
+
+            %calculating variances: 
+            vi = var(a_mat(1:t_idx_range,:),0,'all'); %initial variance in first t_range seconds
+            vf = var(a_mat((end-t_idx_range):end,:),0,'all');
+            
+            %calculating growth coefficient: 
+            lambda = (log(vf) - log(vi))/(2*t_window); 
+
+            %binary value: 
+            increase = lambda>0; 
+            
+            %storing data: 
+            all_params = [n,params.epsilon,params.z,tau_n_vec(j),tau_c_vec(k),lambda,increase];
+            heat_map_data{i}(count,:) = all_params;
+            count = count+1; 
+            
+        end
+    end
+end
+toc
+
+%% Main
+%
+fixed_point = []; 
+base_oscillations = []; 
+grp_oscillations = []; 
+chaos = []; 
+
+%running simulation and storing behavior by type: 
+
+for i = 1:length(n_vec)
+    n = n_vec(i);
+    
+    for j = 1:length(z_vec)
+        params.z = z_vec(j); 
+        
+        for k = 1:length(tau_n_vec)
+            params.tau_n = tau_n_vec(k); 
+            
+            for l = 1:length(tau_c_vec)
+                close all; clc; 
+                params.tau_c = tau_c_vec(l); 
+                
+                for m = 1:length(epsilon_vec)
+                    tic
+                    params.epsilon = epsilon_vec(m); 
+                    
+                    %checking stability condition first: 
+                    sig_p = sigma_prime(1/n, params.z, params.epsilon); 
+                    unstable_cond = sig_p >= (1/params.tau_n + 1/params.tau_c);
+                    
+                    if unstable_cond == 1 %only want to run sim for linearly unstable systems
+                    
+                    %simulation:
+                    [a_mat, ~, ~] = Euler3VarSim(n,A0,N0,C0,params);
+%{
+                    %plotting:
+                    figure
+                    hold on
+                    for o=1:n
+                    plot(t,a_mat(:,o), 'linewidth', 1.3)
+                    Legend{o} = ['Region ', num2str(o)];
+                    end
+                    xlabel('Time','fontsize',12,'fontweight', 'bold')
+                    ylabel('Artist Densities','fontsize',12,'fontweight', 'bold')
+                    title('Artist Densities vs Time','fontsize',12,'fontweight', 'bold')
+                    legend(Legend,'fontsize', 12,'fontweight', 'bold')
+                    grid on; grid minor
+                    hold off
+%}
+
+                    %selecting segment for analysis:
+                    t_range = 1000; 
+                    t_start = t(end) - t_range; 
+                    [~,t_start_idx] = min(abs(t-t_start)); 
+                    t_seg = t(t_start_idx:length(t));
+                    a_mat_seg = a_mat(t_start_idx:length(t),:); 
+
+                    [peak_data, fixed_pt, base_osc, grp_osc, sep_grp_osc, chaos] = InterestingBehavior(n,t,a_mat_seg,params);
+
+%{
+                    %plotting segment
+                    figure
+                    hold on
+                    for o=1:n
+                    plot(t_seg,a_mat_seg(:,o), 'linewidth', 1.5)
+                    Legend{o} = ['Region ', num2str(o)];
+                    end
+                    xlabel('Time','fontsize',12,'fontweight', 'bold')
+                    ylabel('Artist Densities','fontsize',12,'fontweight', 'bold')
+                    title('Artist Densities vs Time','fontsize',12,'fontweight', 'bold')
+                    legend(Legend,'fontsize', 12,'fontweight', 'bold')
+                    grid on; grid minor
+                    hold off
+%}
+                        if fixed_pt == 1
+                            idx = length(fixed_point) + 1; 
+                            fixed_point(idx).parameters = [n,params.z, params.tau_n, params.tau_c,params.epsilon]; 
+                            
+                        elseif base_osc == 1
+                             idx = length(base_oscillations)+1; 
+                             base_oscillations(idx).parameters = [n,params.z, params.tau_n, params.tau_c,params.epsilon]; 
+                             base_oscillations(idx).peaks = peak_data;
+                             
+                        elseif grp_osc == 1
+                            idx = length(grp_oscillations)+1;
+                            grp_oscillations(idx).parameters = [n,params.z, params.tau_n, params.tau_c,params.epsilon]; 
+                            grp_oscillations(idx).peaks = peak_data; 
+                        elseif sep_grp_osc == 1
+                            idx = length(sep_grp_oscillations)+1;
+                            sep_grp_oscillations(idx).parameters = [n,params.z, params.tau_n, params.tau_c,params.epsilon]; 
+                            sep_grp_oscillations(idx).peaks = peak_data; 
+                        elseif chaos == 1
+                            idx = length(chaos)+1;
+                            chaos(idx).parameters = [n,params.z, params.tau_n, params.tau_c,params.epsilon]; 
+                            chaos(idx).peaks = peak_data; 
+                        end
+                        toc
+                            placeholder = 1;                       
+                    end
+                end
+            end
+        end
+    end
+end
+%{
+for i = 1:length(epsilon_vec)
+    params.epsilon = epsilon_vec(i); 
+    
+    for j = 1:length(tau_n_vec)
+        params.tau_n = tau_n_vec(j);
+        
+            for k = 1:length(tau_c_vec)
+                params.tau_c = tau_c_vec(k); 
+                
+                %simulation call:
+                [a_mat, n_mat, c_mat] = Euler3VarSim(n,A0,N0,C0,params);
+
+                %looking for interesting behavior (see InterestingBehavior.m function for details): 
+                t_range = 2000; 
+                t_start_idx = floor(0.8*length(t)); 
+                t_seg = t(t_start_idx:(t_start_idx+t_range/dt));
+                a_mat_seg = a_mat(t_start_idx:(t_start_idx + t_range/dt),:); 
+
+                [peak_data, fixed_pt, base_osc, ind_indicators, grp_indicators] = InterestingBehavior(n,t_seg,a_mat_seg,params);
+
+                if fixed_pt == 1
+                    idx = length(fixed_point) + 1; 
+                    fixed_point(idx).parameters = [params.epsilon, params.tau_n, params.tau_c]; 
+                elseif base_osc == 1
+                     idx = length(base_oscillations)+1; 
+                     base_oscillations(idx).parameters = [params.epsilon, params.tau_n, params.tau_c]; 
+                     base_oscillations(idx).peaks = peak_data;
+                elseif (sum(ind_indicators, 'all')==0) && (sum(grp_indicators)>0)
+                    idx = length(grp_oscillations)+1;
+                    grp_oscillations(idx).parameters = [params.epsilon, params.tau_n, params.tau_c]; 
+                    grp_oscillations(idx).peaks = peak_data; 
+                else
+                    idx = length(chaos)+1;
+                    chaos(idx).parameters = [params.epsilon, params.tau_n, params.tau_c]; 
+                    chaos(idx).peaks = peak_data; 
+                end
+
+
+%{           
+                is_interesting = sum(ind_indicators); %+ sum(grp_indicators); 
+
+                    if is_interesting ~=0 
+
+                            %plotting:
+                            figure
+                            hold on
+
+                            subplot(1,2,1)
+                            hold on
+                            for l = 1:n
+                                plot(t,a_mat(:,l))
+                                Legend{k} = ['Region ', num2str(k)];
+                            end
+                            xlabel('Time','fontsize',12,'fontweight', 'bold')
+                            ylabel('Artist Densities','fontsize',12,'fontweight', 'bold')
+                            title('Artist Densities vs Time','fontsize',12,'fontweight', 'bold')
+                            legend(Legend,'fontsize', 12,'fontweight', 'bold')
+                            grid on; grid minor
+                            hold off
+
+                            %plotting selected range
+                            subplot(1,2,2)
+                            hold on
+                            for l=1:n
+                            plot(t_seg,a_mat_seg(:,k), 'linewidth', 1.3)
+                            Legend{k} = ['Region ', num2str(k)];
+                            end
+                            xlabel('Time','fontsize',12,'fontweight', 'bold')
+                            ylabel('Artist Densities','fontsize',12,'fontweight', 'bold')
+                            title('Artist Densities vs Time','fontsize',12,'fontweight', 'bold')
+                            legend(Legend,'fontsize', 12,'fontweight', 'bold')
+                            grid on; grid minor
+                            hold off
+                            hold off
+
+                      %printing stuff to command window: 
+                      ind_indicators
+                      grp_indicators
+                      tau_N = params.tau_n
+                      tau_C = params.tau_c
+                      close all; clc; 
+                    end
+%}
+            end
+    end
+end
+    %}
+
+toc
+%}
